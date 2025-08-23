@@ -78,10 +78,6 @@ class YouTubeToMP3:
             '--audio-quality', quality,  # 音質設定
             '--output', output_template, # 出力先
             '--no-playlist',             # プレイリストの場合は最初の動画のみ
-            '--write-thumbnail',         # サムネイルも保存
-            '--embed-thumbnail',         # サムネイルをMP3に埋め込み
-            '--add-metadata',            # メタデータを追加
-            '--write-description',       # 説明文も保存
             url
         ]
         
@@ -130,10 +126,6 @@ class YouTubeToMP3:
             '--audio-format', 'mp3',
             '--audio-quality', quality,
             '--output', output_template,
-            '--write-thumbnail',
-            '--embed-thumbnail',
-            '--add-metadata',
-            '--write-description',
             playlist_url
         ]
         
