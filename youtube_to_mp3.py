@@ -53,7 +53,7 @@ class YouTubeToMP3:
         print("インストール方法: pip install yt-dlp")
         return False
     
-    def download_mp3(self, url, quality="192"):
+    def download_mp3(self, url, quality="320"):
         """
         YouTube動画をMP3形式でダウンロード
         
@@ -76,13 +76,14 @@ class YouTubeToMP3:
             '--extract-audio',           # 音声のみ抽出
             '--audio-format', 'mp3',     # MP3形式に変換
             '--audio-quality', quality,  # 音質設定
+            '--embed-thumbnail',         # サムネイルを埋め込み
             '--output', output_template, # 出力先
             '--no-playlist',             # プレイリストの場合は最初の動画のみ
             url
         ]
         
         try:
-            print(f"ダウンロード開始: {url}")
+            print(f"MP3ダウンロード開始: {url}")
             print(f"出力先: {self.output_dir}")
             print(f"音質: {quality}kbps")
             print("-" * 50)
@@ -90,12 +91,12 @@ class YouTubeToMP3:
             # yt-dlpコマンドを実行
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
             
-            print("ダウンロード完了!")
+            print("MP3ダウンロード完了!")
             print(result.stdout)
             return True
             
         except subprocess.CalledProcessError as e:
-            print(f"ダウンロードエラー: {e}")
+            print(f"MP3ダウンロードエラー: {e}")
             if e.stderr:
                 print(f"エラー詳細: {e.stderr}")
             return False
@@ -103,7 +104,9 @@ class YouTubeToMP3:
             print(f"予期しないエラー: {e}")
             return False
     
-    def download_playlist(self, playlist_url, quality="192", limit=None):
+
+    
+    def download_playlist(self, playlist_url, quality="320", limit=None):
         """
         プレイリストからMP3をダウンロード
         
@@ -125,6 +128,7 @@ class YouTubeToMP3:
             '--extract-audio',
             '--audio-format', 'mp3',
             '--audio-quality', quality,
+            '--embed-thumbnail',         # サムネイルを埋め込み
             '--output', output_template,
             playlist_url
         ]
@@ -179,9 +183,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用例:
+  # 単一動画をダウンロード
   python youtube_to_mp3.py "https://www.youtube.com/watch?v=VIDEO_ID"
   python youtube_to_mp3.py "https://www.youtube.com/watch?v=VIDEO_ID" --quality 320
+  
+  # プレイリストをダウンロード
   python youtube_to_mp3.py "https://www.youtube.com/playlist?list=PLAYLIST_ID" --playlist
+  python youtube_to_mp3.py "https://www.youtube.com/playlist?list=PLAYLIST_ID" --playlist --quality 320 --limit 5
+  
+  # ダウンロード済みファイル一覧を表示
   python youtube_to_mp3.py --list
         """
     )
@@ -189,15 +199,15 @@ def main():
     parser.add_argument('url', nargs='?', help='YouTube動画またはプレイリストのURL')
     parser.add_argument('-o', '--output', default='downloads', 
                        help='出力ディレクトリ (デフォルト: downloads)')
-    parser.add_argument('-q', '--quality', default='192', 
+    parser.add_argument('-q', '--quality', default='320', 
                        choices=['64', '128', '192', '256', '320'],
-                       help='MP3音質 (デフォルト: 192)')
+                       help='MP3音質 (デフォルト: 320)')
     parser.add_argument('-p', '--playlist', action='store_true',
                        help='プレイリストとしてダウンロード')
     parser.add_argument('-l', '--limit', type=int,
                        help='プレイリストからダウンロードする動画数の制限')
     parser.add_argument('--list', action='store_true',
-                       help='ダウンロード済みファイル一覧を表示')
+                       help='ダウンロード済みMP3ファイル一覧を表示')
     
     args = parser.parse_args()
     
@@ -227,10 +237,10 @@ def main():
             success = downloader.download_mp3(args.url, args.quality)
         
         if success:
-            print("\n✅ ダウンロードが正常に完了しました!")
+            print("\n✅ MP3ダウンロードが正常に完了しました!")
             print(f"ファイルは {args.output} ディレクトリに保存されています")
         else:
-            print("\n❌ ダウンロードに失敗しました")
+            print("\n❌ MP3ダウンロードに失敗しました")
             sys.exit(1)
             
     except KeyboardInterrupt:
