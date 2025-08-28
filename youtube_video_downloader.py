@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YouTubeから動画形式でダウンロードするプログラム
+YouTubeから動画形式でダウンロードするプログラム（高速化版）
 yt-dlpを使用してYouTube動画を指定した画質でダウンロードします
+並列ダウンロード、最適化オプション、プログレスバー対応
 """
 
 import os
@@ -11,19 +12,101 @@ import subprocess
 import argparse
 from pathlib import Path
 import re
+import concurrent.futures
+import threading
+import time
+import hashlib
+import json
+from urllib.parse import urlparse, parse_qs
 
 class YouTubeVideoDownloader:
-    def __init__(self, output_dir="downloads"):
+    def __init__(self, output_dir="downloads", max_workers=3, enable_cache=True):
         """
-        YouTubeVideoDownloaderクラスの初期化
+        YouTubeVideoDownloaderクラスの初期化（高速化版）
         
         Args:
             output_dir (str): ダウンロード先ディレクトリ
+            max_workers (int): 並列ダウンロードの最大数
+            enable_cache (bool): キャッシュ機能を有効にするか
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         self.yt_dlp_path = None
+        self.max_workers = max_workers
+        self.enable_cache = enable_cache
+        self.cache_file = self.output_dir / ".download_cache.json"
+        self.download_cache = self.load_cache()
+        self.lock = threading.Lock()
         
+    def load_cache(self):
+        """ダウンロードキャッシュを読み込み"""
+        if not self.enable_cache or not self.cache_file.exists():
+            return {}
+        
+        try:
+            with open(self.cache_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return {}
+    
+    def save_cache(self):
+        """ダウンロードキャッシュを保存"""
+        if not self.enable_cache:
+            return
+        
+        try:
+            with open(self.cache_file, 'w', encoding='utf-8') as f:
+                json.dump(self.download_cache, f, ensure_ascii=False, indent=2)
+        except IOError:
+            pass
+    
+    def get_video_id(self, url):
+        """YouTube URLから動画IDを抽出"""
+        if 'youtube.com/watch' in url:
+            parsed = urlparse(url)
+            query_params = parse_qs(parsed.query)
+            return query_params.get('v', [None])[0]
+        elif 'youtu.be/' in url:
+            return url.split('youtu.be/')[-1].split('?')[0]
+        return None
+    
+    def is_already_downloaded(self, url, quality):
+        """動画が既にダウンロード済みかチェック"""
+        if not self.enable_cache:
+            return False
+        
+        video_id = self.get_video_id(url)
+        if not video_id:
+            return False
+        
+        cache_key = f"{video_id}_{quality}"
+        if cache_key in self.download_cache:
+            cached_info = self.download_cache[cache_key]
+            cached_file = self.output_dir / cached_info['filename']
+            if cached_file.exists():
+                return True
+        
+        return False
+    
+    def add_to_cache(self, url, quality, filename):
+        """ダウンロード完了をキャッシュに記録"""
+        if not self.enable_cache:
+            return
+        
+        video_id = self.get_video_id(url)
+        if not video_id:
+            return
+        
+        cache_key = f"{video_id}_{quality}"
+        self.download_cache[cache_key] = {
+            'filename': filename,
+            'timestamp': time.time(),
+            'quality': quality
+        }
+        
+        with self.lock:
+            self.save_cache()
+
     def check_yt_dlp(self):
         """
         yt-dlpがインストールされているかチェック
@@ -256,7 +339,7 @@ class YouTubeVideoDownloader:
     
     def download_video(self, url, quality="720p", format_id=None, audio_quality="0", audio_format="best"):
         """
-        YouTube動画を動画形式でダウンロード
+        YouTube動画を動画形式でダウンロード（高速化版）
         
         Args:
             url (str): YouTube動画のURL
@@ -271,11 +354,15 @@ class YouTubeVideoDownloader:
         if not self.check_yt_dlp():
             return False
         
+        # キャッシュチェック
+        if self.is_already_downloaded(url, quality):
+            print(f"✅ 動画は既にダウンロード済みです: {url}")
+            return True
+        
         # 出力ファイル名のテンプレート
         output_template = str(self.output_dir / "%(title)s.%(ext)s")
         
-        # yt-dlpコマンドの構築
-        # 形式IDが指定されている場合はそれを使用、そうでなければ動的に選択
+        # yt-dlpコマンドの構築（高速化オプション付き）
         if format_id:
             format_spec = format_id
             print(f"カスタム形式ID: {format_id}")
@@ -290,37 +377,66 @@ class YouTubeVideoDownloader:
                 print("形式の取得に失敗したため、デフォルト形式を使用")
                 format_spec = "best"
         
+        # 高速化のためのyt-dlpオプション
         cmd = [
             self.yt_dlp_path,
-            '--format', format_spec,                    # 選択された形式ID（動画+音声）
+            '--format', format_spec,                    # 選択された形式ID
             '--output', output_template,                 # 出力先
             '--no-playlist',                             # プレイリストの場合は最初の動画のみ
             '--audio-quality', audio_quality,            # 音声品質
             '--audio-format', audio_format,              # 音声形式
             '--merge-output-format', 'mp4',              # 出力形式をMP4に統一
+            '--concurrent-fragments', '4',               # 並列フラグメントダウンロード
+            '--downloader-args', 'aria2c:-x 16 -s 16',  # aria2cを使用した高速ダウンロード
+            '--external-downloader', 'aria2c',           # 外部ダウンローダーとしてaria2cを使用
+            '--progress',                                # プログレスバー表示
+            '--newline',                                 # 改行を適切に処理
+            '--no-mtime',                                # ファイル時刻の変更を無効化（高速化）
+            '--no-write-thumbnail',                      # サムネイルの書き込みを無効化（高速化）
+            '--no-write-description',                    # 説明の書き込みを無効化（高速化）
+            '--no-write-info-json',                      # 情報JSONの書き込みを無効化（高速化）
+            '--no-write-subtitles',                      # 字幕の書き込みを無効化（高速化）
             url
         ]
         
         try:
-            print(f"動画ダウンロード開始: {url}")
-            print(f"出力先: {self.output_dir}")
-            print(f"画質: {quality}")
+            print(f"🚀 動画ダウンロード開始: {url}")
+            print(f"📁 出力先: {self.output_dir}")
+            print(f"🎬 画質: {quality}")
+            print(f"⚡ 高速化オプション: 並列フラグメント、aria2c使用")
             print("-" * 50)
             
-            # yt-dlpコマンドを実行
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            # yt-dlpコマンドを実行（リアルタイム出力）
+            process = subprocess.Popen(
+                cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                bufsize=1
+            )
             
-            print("動画ダウンロード完了!")
-            print(result.stdout)
-            return True
+            # リアルタイムで出力を表示
+            for line in process.stdout:
+                print(line.rstrip())
             
-        except subprocess.CalledProcessError as e:
-            print(f"動画ダウンロードエラー: {e}")
-            if e.stderr:
-                print(f"エラー詳細: {e.stderr}")
-            return False
+            process.wait()
+            
+            if process.returncode == 0:
+                print("✅ 動画ダウンロード完了!")
+                
+                # ダウンロードされたファイルを検索してキャッシュに追加
+                downloaded_files = list(self.output_dir.glob("*.mp4"))
+                if downloaded_files:
+                    latest_file = max(downloaded_files, key=lambda x: x.stat().st_mtime)
+                    self.add_to_cache(url, quality, latest_file.name)
+                
+                return True
+            else:
+                print(f"❌ 動画ダウンロードエラー: 終了コード {process.returncode}")
+                return False
+            
         except Exception as e:
-            print(f"予期しないエラー: {e}")
+            print(f"❌ 予期しないエラー: {e}")
             return False
     
     def show_formats(self, url):
@@ -379,7 +495,7 @@ class YouTubeVideoDownloader:
     
     def download_playlist(self, playlist_url, quality="720p", limit=None, format_id=None, audio_quality="0", audio_format="best"):
         """
-        プレイリストから動画をダウンロード
+        プレイリストから動画を並列ダウンロード（高速化版）
         
         Args:
             playlist_url (str): YouTubeプレイリストのURL
@@ -395,31 +511,14 @@ class YouTubeVideoDownloader:
         if not self.check_yt_dlp():
             return False
         
-        output_template = str(self.output_dir / "%(playlist_title)s/%(title)s.%(ext)s")
+        # プレイリスト情報を取得
+        print(f"📋 プレイリスト情報を取得中: {playlist_url}")
         
-        # 形式IDが指定されている場合はそれを使用、そうでなければ動的に選択
-        if format_id:
-            format_spec = format_id
-            print(f"カスタム形式ID: {format_id}")
-        else:
-            print(f"画質 {quality} の最適な形式を動的に選択中...")
-            # プレイリストの場合は最初の動画で形式を決定
-            available_formats = self.get_available_formats(playlist_url)
-            
-            if available_formats:
-                format_spec = self.select_best_format(quality, available_formats)
-                print(f"選択された形式: {format_spec}")
-            else:
-                print("形式の取得に失敗したため、デフォルト形式を使用")
-                format_spec = "best"
-        
+        # プレイリストの動画URL一覧を取得
         cmd = [
             self.yt_dlp_path,
-            '--format', format_spec,
-            '--output', output_template,
-            '--audio-quality', audio_quality,            # 音声品質
-            '--audio-format', audio_format,              # 音声形式
-            '--merge-output-format', 'mp4',              # 出力形式をMP4に統一
+            '--flat-playlist',
+            '--get-id',
             playlist_url
         ]
         
@@ -427,56 +526,130 @@ class YouTubeVideoDownloader:
             cmd.extend(['--playlist-items', f'1-{limit}'])
         
         try:
-            print(f"プレイリスト動画ダウンロード開始: {playlist_url}")
-            print(f"出力先: {self.output_dir}")
-            print(f"画質: {quality}")
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            video_ids = result.stdout.strip().split('\n')
+            video_ids = [vid for vid in video_ids if vid]  # 空行を除去
+            
+            if not video_ids:
+                print("❌ プレイリストから動画IDを取得できませんでした")
+                return False
+            
+            print(f"📹 プレイリスト内の動画数: {len(video_ids)}")
             if limit:
-                print(f"制限: {limit}個の動画")
+                print(f"📊 ダウンロード制限: {limit}個")
+            
+            # 並列ダウンロードの実行
+            print(f"🚀 並列ダウンロード開始 (最大{self.max_workers}個同時)")
             print("-" * 50)
             
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            success_count = 0
+            failed_count = 0
             
-            print("プレイリスト動画ダウンロード完了!")
-            print(result.stdout)
-            return True
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # 各動画のダウンロードタスクを開始
+                future_to_url = {}
+                for video_id in video_ids:
+                    video_url = f"https://www.youtube.com/watch?v={video_id}"
+                    future = executor.submit(
+                        self.download_video, 
+                        video_url, 
+                        quality, 
+                        format_id, 
+                        audio_quality, 
+                        audio_format
+                    )
+                    future_to_url[future] = video_url
+                
+                # 完了したタスクの結果を収集
+                for future in concurrent.futures.as_completed(future_to_url):
+                    url = future_to_url[future]
+                    try:
+                        if future.result():
+                            success_count += 1
+                            print(f"✅ 完了: {url}")
+                        else:
+                            failed_count += 1
+                            print(f"❌ 失敗: {url}")
+                    except Exception as e:
+                        failed_count += 1
+                        print(f"❌ エラー: {url} - {e}")
             
-        except subprocess.CalledProcessError as e:
-            print(f"プレイリスト動画ダウンロードエラー: {e}")
-            if e.stderr:
-                print(f"エラー詳細: {e.stderr}")
-            return False
-    
-    def show_formats(self, url):
-        """
-        利用可能な形式一覧を表示
-        
-        Args:
-            url (str): YouTube動画のURL
-        
-        Returns:
-            bool: 成功した場合True
-        """
-        if not self.check_yt_dlp():
-            return False
-        
-        cmd = [self.yt_dlp_path, '--list-formats', url]
-        
-        try:
-            print(f"利用可能な形式を取得中: {url}")
             print("-" * 50)
+            print(f"🎉 プレイリストダウンロード完了!")
+            print(f"✅ 成功: {success_count}個")
+            print(f"❌ 失敗: {failed_count}個")
             
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            print(result.stdout)
-            return True
+            return failed_count == 0
             
         except subprocess.CalledProcessError as e:
-            print(f"形式一覧の取得エラー: {e}")
+            print(f"❌ プレイリスト情報の取得エラー: {e}")
             if e.stderr:
                 print(f"エラー詳細: {e.stderr}")
             return False
         except Exception as e:
-            print(f"予期しないエラー: {e}")
+            print(f"❌ 予期しないエラー: {e}")
             return False
+    
+    def download_multiple_videos(self, urls, quality="720p", format_id=None, audio_quality="0", audio_format="best"):
+        """
+        複数の動画を並列ダウンロード
+        
+        Args:
+            urls (list): YouTube動画のURLリスト
+            quality (str): 動画の画質
+            format_id (str): 特定の形式ID（オプション）
+            audio_quality (str): 音声品質
+            audio_format (str): 音声形式
+        
+        Returns:
+            dict: 各URLのダウンロード結果
+        """
+        if not self.check_yt_dlp():
+            return {}
+        
+        print(f"🚀 複数動画の並列ダウンロード開始 (最大{self.max_workers}個同時)")
+        print(f"📹 対象動画数: {len(urls)}")
+        print("-" * 50)
+        
+        results = {}
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # 各動画のダウンロードタスクを開始
+            future_to_url = {
+                executor.submit(
+                    self.download_video, 
+                    url, 
+                    quality, 
+                    format_id, 
+                    audio_quality, 
+                    audio_format
+                ): url for url in urls
+            }
+            
+            # 完了したタスクの結果を収集
+            for future in concurrent.futures.as_completed(future_to_url):
+                url = future_to_url[future]
+                try:
+                    success = future.result()
+                    results[url] = success
+                    if success:
+                        print(f"✅ 完了: {url}")
+                    else:
+                        print(f"❌ 失敗: {url}")
+                except Exception as e:
+                    results[url] = False
+                    print(f"❌ エラー: {url} - {e}")
+        
+        # 結果サマリー
+        success_count = sum(1 for success in results.values() if success)
+        failed_count = len(results) - success_count
+        
+        print("-" * 50)
+        print(f"🎉 並列ダウンロード完了!")
+        print(f"✅ 成功: {success_count}個")
+        print(f"❌ 失敗: {failed_count}個")
+        
+        return results
     
     def list_downloads(self):
         """
@@ -500,31 +673,27 @@ class YouTubeVideoDownloader:
             print()
 
 def main():
-    """メイン関数"""
+    """メイン関数（高速化版）"""
     parser = argparse.ArgumentParser(
-        description="YouTubeから動画形式でダウンロードするプログラム",
+        description="YouTubeから動画形式でダウンロードするプログラム（高速化版）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用例:
-  # 単一動画をダウンロード（画質指定 - 形式ID自動選択）
+  # 単一動画をダウンロード（高速化オプション付き）
   python youtube_video_downloader.py "https://www.youtube.com/watch?v=VIDEO_ID"
   python youtube_video_downloader.py "https://www.youtube.com/watch?v=VIDEO_ID" --quality 1080p
-  python youtube_video_downloader.py "https://www.youtube.com/watch?v=VIDEO_ID" --quality 720p
   
-  # 高品質音声でダウンロード
-  python youtube_video_downloader.py "https://www.youtube.com/watch?v=VIDEO_ID" --quality 1080p --audio-quality 0
-  python youtube_video_downloader.py "https://www.youtube.com/watch?v=VIDEO_ID" --quality 1080p --audio-format flac
+  # 並列ダウンロード（複数動画）
+  python youtube_video_downloader.py --urls "URL1" "URL2" "URL3" --quality 720p
   
-  # 特定の形式IDを指定してダウンロード
-  python youtube_video_downloader.py "https://www.youtube.com/watch?v=VIDEO_ID" --format-id "232+234"
-  python youtube_video_downloader.py "https://www.youtube.com/watch?v=VIDEO_ID" --format-id "270+234"
+  # プレイリストを並列ダウンロード
+  python youtube_video_downloader.py "https://www.youtube.com/playlist?list=PLAYLIST_ID" --playlist --max-workers 5
+  
+  # 高速化オプションの調整
+  python youtube_video_downloader.py "URL" --max-workers 8 --no-cache
   
   # 利用可能な形式一覧を表示
-  python youtube_video_downloader.py "https://www.youtube.com/watch?v=VIDEO_ID" --show-formats
-  
-  # プレイリストをダウンロード
-  python youtube_video_downloader.py "https://www.youtube.com/playlist?list=PLAYLIST_ID" --playlist
-  python youtube_video_downloader.py "https://www.youtube.com/playlist?list=PLAYLIST_ID" --playlist --quality 1080p --limit 5
+  python youtube_video_downloader.py "URL" --show-formats
   
   # ダウンロード済みファイル一覧を表示
   python youtube_video_downloader.py --list
@@ -532,6 +701,7 @@ def main():
     )
     
     parser.add_argument('url', nargs='?', help='YouTube動画またはプレイリストのURL')
+    parser.add_argument('--urls', nargs='+', help='複数のYouTube動画URL（並列ダウンロード用）')
     parser.add_argument('-o', '--output', default='downloads', 
                        help='出力ディレクトリ (デフォルト: downloads)')
     parser.add_argument('-q', '--quality', default='720p', 
@@ -553,15 +723,44 @@ def main():
                        help='ダウンロード済み動画ファイル一覧を表示')
     parser.add_argument('--show-formats', action='store_true',
                        help='利用可能な形式一覧を表示')
+    parser.add_argument('--max-workers', type=int, default=3,
+                       help='並列ダウンロードの最大数 (デフォルト: 3)')
+    parser.add_argument('--no-cache', action='store_true',
+                       help='キャッシュ機能を無効化')
     
     args = parser.parse_args()
     
-    # インスタンス作成
-    downloader = YouTubeVideoDownloader(args.output)
+    # インスタンス作成（高速化オプション付き）
+    downloader = YouTubeVideoDownloader(
+        output_dir=args.output,
+        max_workers=args.max_workers,
+        enable_cache=not args.no_cache
+    )
     
     if args.list:
         # ダウンロード済みファイル一覧表示
         downloader.list_downloads()
+        return
+    
+    # 複数URLの並列ダウンロード
+    if args.urls:
+        if not all(re.search(r'(youtube\.com|youtu\.be)', url) for url in args.urls):
+            print("❌ エラー: 有効なYouTube URLを入力してください")
+            return
+        
+        success = downloader.download_multiple_videos(
+            args.urls, 
+            args.quality, 
+            args.format_id, 
+            args.audio_quality, 
+            args.audio_format
+        )
+        
+        if success:
+            print("\n✅ 並列ダウンロードが正常に完了しました!")
+        else:
+            print("\n❌ 並列ダウンロードに失敗しました")
+            sys.exit(1)
         return
     
     if not args.url:
@@ -570,7 +769,7 @@ def main():
     
     # URLがYouTubeのものかチェック
     if not re.search(r'(youtube\.com|youtu\.be)', args.url):
-        print("エラー: 有効なYouTube URLを入力してください")
+        print("❌ エラー: 有効なYouTube URLを入力してください")
         return
     
     # 形式一覧表示
@@ -580,24 +779,39 @@ def main():
     
     try:
         if args.playlist:
-            # プレイリストダウンロード
-            success = downloader.download_playlist(args.url, args.quality, args.limit, args.format_id, args.audio_quality, args.audio_format)
+            # プレイリスト並列ダウンロード
+            success = downloader.download_playlist(
+                args.url, 
+                args.quality, 
+                args.limit, 
+                args.format_id, 
+                args.audio_quality, 
+                args.audio_format
+            )
         else:
             # 単一動画ダウンロード
-            success = downloader.download_video(args.url, args.quality, args.format_id, args.audio_quality, args.audio_format)
+            success = downloader.download_video(
+                args.url, 
+                args.quality, 
+                args.format_id, 
+                args.audio_quality, 
+                args.audio_format
+            )
         
         if success:
             print("\n✅ 動画ダウンロードが正常に完了しました!")
-            print(f"ファイルは {args.output} ディレクトリに保存されています")
+            print(f"📁 ファイルは {args.output} ディレクトリに保存されています")
+            if args.enable_cache:
+                print("💾 キャッシュに保存されました（重複ダウンロード防止）")
         else:
             print("\n❌ 動画ダウンロードに失敗しました")
             sys.exit(1)
             
     except KeyboardInterrupt:
-        print("\n\nダウンロードが中断されました")
+        print("\n\n⏹️ ダウンロードが中断されました")
         sys.exit(1)
     except Exception as e:
-        print(f"\n予期しないエラーが発生しました: {e}")
+        print(f"\n❌ 予期しないエラーが発生しました: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
