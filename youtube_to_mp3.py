@@ -96,12 +96,58 @@ class YouTubeToMP3:
             return True
             
         except subprocess.CalledProcessError as e:
-            print(f"MP3ダウンロードエラー: {e}")
+            print(f"\n❌ MP3ダウンロードエラーが発生しました")
             if e.stderr:
-                print(f"エラー詳細: {e.stderr}")
+                error_output = e.stderr
+                print(f"\nエラー詳細:\n{error_output}")
+                
+                # Python 3.9非推奨エラーの検出
+                if "Python version 3.9 has been deprecated" in error_output or "Please update to Python 3.10" in error_output:
+                    print("\n" + "="*60)
+                    print("⚠️  Python 3.9が非推奨になっています")
+                    print("="*60)
+                    print("解決方法:")
+                    print("1. Python 3.10以上をインストールしてください")
+                    print("   macOS: brew install python@3.10")
+                    print("   Windows: https://www.python.org/downloads/ から最新版をダウンロード")
+                    print("   Ubuntu/Debian: sudo apt install python3.10")
+                    print("\n2. インストール後、以下のコマンドで確認:")
+                    print("   python3.10 --version")
+                    print("\n3. yt-dlpを再インストール:")
+                    print("   python3.10 -m pip install --upgrade yt-dlp")
+                    print("="*60)
+                
+                # HTTP 403エラーの検出
+                if "HTTP Error 403" in error_output or "403: Forbidden" in error_output:
+                    print("\n" + "="*60)
+                    print("⚠️  HTTP 403エラー: YouTubeがアクセスを拒否しました")
+                    print("="*60)
+                    print("解決方法:")
+                    print("1. yt-dlpを最新版にアップデート:")
+                    print("   pip install --upgrade yt-dlp")
+                    print("   または")
+                    print("   python3 -m pip install --upgrade yt-dlp")
+                    print("\n2. しばらく時間をおいてから再試行してください")
+                    print("3. 別の動画URLで試してください")
+                    print("4. 動画が公開されているか、地域制限がないか確認してください")
+                    print("="*60)
+                
+                # その他の一般的なエラー
+                if "ERROR" in error_output and "403" not in error_output and "deprecated" not in error_output.lower():
+                    print("\n" + "="*60)
+                    print("💡 トラブルシューティング:")
+                    print("="*60)
+                    print("1. yt-dlpを最新版にアップデート:")
+                    print("   pip install --upgrade yt-dlp")
+                    print("\n2. インターネット接続を確認してください")
+                    print("3. YouTubeのURLが正しいか確認してください")
+                    print("4. 動画が公開されているか確認してください")
+                    print("="*60)
+            else:
+                print(f"エラー: {e}")
             return False
         except Exception as e:
-            print(f"予期しないエラー: {e}")
+            print(f"\n❌ 予期しないエラー: {e}")
             return False
     
 
@@ -151,9 +197,55 @@ class YouTubeToMP3:
             return True
             
         except subprocess.CalledProcessError as e:
-            print(f"プレイリストダウンロードエラー: {e}")
+            print(f"\n❌ プレイリストダウンロードエラーが発生しました")
             if e.stderr:
-                print(f"エラー詳細: {e.stderr}")
+                error_output = e.stderr
+                print(f"\nエラー詳細:\n{error_output}")
+                
+                # Python 3.9非推奨エラーの検出
+                if "Python version 3.9 has been deprecated" in error_output or "Please update to Python 3.10" in error_output:
+                    print("\n" + "="*60)
+                    print("⚠️  Python 3.9が非推奨になっています")
+                    print("="*60)
+                    print("解決方法:")
+                    print("1. Python 3.10以上をインストールしてください")
+                    print("   macOS: brew install python@3.10")
+                    print("   Windows: https://www.python.org/downloads/ から最新版をダウンロード")
+                    print("   Ubuntu/Debian: sudo apt install python3.10")
+                    print("\n2. インストール後、以下のコマンドで確認:")
+                    print("   python3.10 --version")
+                    print("\n3. yt-dlpを再インストール:")
+                    print("   python3.10 -m pip install --upgrade yt-dlp")
+                    print("="*60)
+                
+                # HTTP 403エラーの検出
+                if "HTTP Error 403" in error_output or "403: Forbidden" in error_output:
+                    print("\n" + "="*60)
+                    print("⚠️  HTTP 403エラー: YouTubeがアクセスを拒否しました")
+                    print("="*60)
+                    print("解決方法:")
+                    print("1. yt-dlpを最新版にアップデート:")
+                    print("   pip install --upgrade yt-dlp")
+                    print("   または")
+                    print("   python3 -m pip install --upgrade yt-dlp")
+                    print("\n2. しばらく時間をおいてから再試行してください")
+                    print("3. 別の動画URLで試してください")
+                    print("4. 動画が公開されているか、地域制限がないか確認してください")
+                    print("="*60)
+                
+                # その他の一般的なエラー
+                if "ERROR" in error_output and "403" not in error_output and "deprecated" not in error_output.lower():
+                    print("\n" + "="*60)
+                    print("💡 トラブルシューティング:")
+                    print("="*60)
+                    print("1. yt-dlpを最新版にアップデート:")
+                    print("   pip install --upgrade yt-dlp")
+                    print("\n2. インターネット接続を確認してください")
+                    print("3. YouTubeのURLが正しいか確認してください")
+                    print("4. 動画が公開されているか確認してください")
+                    print("="*60)
+            else:
+                print(f"エラー: {e}")
             return False
     
     def list_downloads(self):
